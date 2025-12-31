@@ -3,7 +3,7 @@ import { cors } from "hono/cors";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { streamSSE } from "hono/streaming";
 import { serve } from "@hono/node-server";
-import type { Server } from "http";
+import type { ServerType } from "@hono/node-server";
 import {
   initStorage,
   loadStorage,
@@ -54,7 +54,7 @@ export function createServer(options: ServerOptions) {
         origin: ["http://localhost:12000"],
         allowMethods: ["GET", "POST", "OPTIONS"],
         allowHeaders: ["Content-Type"],
-      })
+      }),
     );
   }
 
@@ -179,7 +179,7 @@ export function createServer(options: ServerOptions) {
       try {
         const { messages, nextOffset } = await getConversationStream(
           sessionId,
-          offset
+          offset,
         );
         offset = nextOffset;
 
@@ -227,7 +227,7 @@ export function createServer(options: ServerOptions) {
 
   startWatcher();
 
-  let httpServer: Server | null = null;
+  let httpServer: ServerType | null = null;
 
   return {
     app,
@@ -235,14 +235,17 @@ export function createServer(options: ServerOptions) {
     start: async () => {
       await loadStorage();
       const openUrl = `http://localhost:${dev ? 12000 : port}/`;
+
       console.log(`\n  claude-run is running at ${openUrl}\n`);
-      if (shouldOpen) {
-        open(openUrl);
+      if (!dev && shouldOpen) {
+        open(openUrl).catch(console.error);
       }
+
       httpServer = serve({
         fetch: app.fetch,
         port,
       });
+
       return httpServer;
     },
     stop: () => {

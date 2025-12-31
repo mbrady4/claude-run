@@ -21,13 +21,6 @@ export function formatTime(timestamp: number): string {
   return date.toLocaleDateString();
 }
 
-export function truncateText(text: string, maxLength: number): string {
-  if (text.length <= maxLength) {
-    return text;
-  }
-  return text.slice(0, maxLength) + "...";
-}
-
 const SANITIZE_PATTERNS = [
   /<command-name>[^<]*<\/command-name>/g,
   /<command-message>[^<]*<\/command-message>/g,

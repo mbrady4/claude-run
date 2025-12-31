@@ -1,9 +1,8 @@
 import { watch, type FSWatcher } from "chokidar";
-import { basename, dirname, join } from "path";
+import { basename, join } from "path";
 
 type HistoryChangeCallback = () => void;
 type SessionChangeCallback = (sessionId: string, filePath: string) => void;
-type ProjectChangeCallback = (projectId: string) => void;
 
 let watcher: FSWatcher | null = null;
 let claudeDir = "";
@@ -12,7 +11,6 @@ const debounceMs = 20;
 
 const historyChangeListeners = new Set<HistoryChangeCallback>();
 const sessionChangeListeners = new Set<SessionChangeCallback>();
-const projectChangeListeners = new Set<ProjectChangeCallback>();
 
 export function initWatcher(dir: string): void {
   claudeDir = dir;
@@ -25,12 +23,8 @@ function emitChange(filePath: string): void {
     }
   } else if (filePath.endsWith(".jsonl")) {
     const sessionId = basename(filePath, ".jsonl");
-    const projectId = basename(dirname(filePath));
     for (const callback of sessionChangeListeners) {
       callback(sessionId, filePath);
-    }
-    for (const callback of projectChangeListeners) {
-      callback(projectId);
     }
   }
 }
@@ -99,12 +93,4 @@ export function onSessionChange(callback: SessionChangeCallback): void {
 
 export function offSessionChange(callback: SessionChangeCallback): void {
   sessionChangeListeners.delete(callback);
-}
-
-export function onProjectChange(callback: ProjectChangeCallback): void {
-  projectChangeListeners.add(callback);
-}
-
-export function offProjectChange(callback: ProjectChangeCallback): void {
-  projectChangeListeners.delete(callback);
 }

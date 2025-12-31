@@ -72,10 +72,6 @@ export function getClaudeDir(): string {
   return claudeDir;
 }
 
-export function getProjectsDir(): string {
-  return projectsDir;
-}
-
 export function invalidateHistoryCache(): void {
   historyCache = null;
 }
