@@ -1,22 +1,25 @@
-# claude-run
+<div align="center">
 
-A beautiful web UI for browsing Claude Code conversation history.
+# Claude Run
+
+Browse your Claude Code conversation history in a beautiful web UI
+
+[![npm version](https://img.shields.io/npm/v/claude-run.svg)](https://www.npmjs.com/package/claude-run)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+
+<img src=".github/claude-run.gif" alt="Claude Run Demo" width="800" />
+
+</div>
+
+## Quick Start
 
 ```bash
 npx claude-run
 ```
 
-The browser will open automatically at [localhost:12001](http://localhost:12001) with the UI showing claude sessions history.
+The browser will open automatically at http://localhost:12001.
 
 ## Installation
-
-You can either run it without installation
-
-```bash
-npx claude-run
-```
-
-on install it globally
 
 ```bash
 npm install -g claude-run
