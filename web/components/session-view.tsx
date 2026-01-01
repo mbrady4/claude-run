@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef, useCallback } from "react";
 import type { ConversationMessage } from "@claude-run/api";
 import MessageBlock from "./message-block";
+import ScrollToBottomButton from "./scroll-to-bottom-button";
 
 const MAX_RETRIES = 10;
 const BASE_RETRY_DELAY_MS = 1000;
@@ -153,18 +154,12 @@ function SessionView(props: SessionViewProps) {
         </div>
 
         {!autoScroll && (
-          <button
+          <ScrollToBottomButton
             onClick={() => {
               setAutoScroll(true);
               lastMessageRef.current?.scrollIntoView({ behavior: "instant" });
             }}
-            className="fixed bottom-4 right-6 rounded-full bg-zinc-200/90 px-3.5 py-2 text-xs font-medium text-zinc-900 shadow-lg transition-all hover:bg-zinc-100 flex items-center gap-1.5 backdrop-blur-sm"
-          >
-            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" />
-            </svg>
-            <span>Latest</span>
-          </button>
+          />
         )}
       </div>
     </div>
