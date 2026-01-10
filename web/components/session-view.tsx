@@ -21,6 +21,7 @@ function SessionView(props: SessionViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const lastMessageRef = useRef<HTMLDivElement>(null);
   const offsetRef = useRef(0);
+  const isScrollingProgrammaticallyRef = useRef(false);
   const retryCountRef = useRef(0);
   const eventSourceRef = useRef<EventSource | null>(null);
   const retryTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -91,14 +92,25 @@ function SessionView(props: SessionViewProps) {
     };
   }, [connect]);
 
-  useEffect(() => {
-    if (autoScroll && lastMessageRef.current) {
-      lastMessageRef.current.scrollIntoView({ behavior: "instant" });
+  const scrollToBottom = useCallback(() => {
+    if (!lastMessageRef.current) {
+      return;
     }
-  }, [messages, autoScroll]);
+    isScrollingProgrammaticallyRef.current = true;
+    lastMessageRef.current.scrollIntoView({ behavior: "instant" });
+    requestAnimationFrame(() => {
+      isScrollingProgrammaticallyRef.current = false;
+    });
+  }, []);
+
+  useEffect(() => {
+    if (autoScroll) {
+      scrollToBottom();
+    }
+  }, [messages, autoScroll, scrollToBottom]);
 
   const handleScroll = () => {
-    if (!containerRef.current) {
+    if (!containerRef.current || isScrollingProgrammaticallyRef.current) {
       return;
     }
 
@@ -121,47 +133,49 @@ function SessionView(props: SessionViewProps) {
   }
 
   return (
-    <div
-      ref={containerRef}
-      onScroll={handleScroll}
-      className="h-full overflow-y-auto bg-zinc-950"
-    >
-      <div className="mx-auto max-w-3xl px-4 py-4">
-        {summary && (
-          <div className="mb-6 rounded-xl border border-zinc-800/60 bg-zinc-900/50 p-4">
-            <h2 className="text-sm font-medium text-zinc-200 leading-relaxed">
-              {summary.summary}
-            </h2>
-            <p className="mt-2 text-[11px] text-zinc-500">
-              {conversationMessages.length} messages
-            </p>
-          </div>
-        )}
-
-        <div className="flex flex-col gap-2">
-          {conversationMessages.map((message, index) => (
-            <div
-              key={message.uuid || index}
-              ref={
-                index === conversationMessages.length - 1
-                  ? lastMessageRef
-                  : undefined
-              }
-            >
-              <MessageBlock message={message} />
+    <div className="relative h-full">
+      <div
+        ref={containerRef}
+        onScroll={handleScroll}
+        className="h-full overflow-y-auto bg-zinc-950"
+      >
+        <div className="mx-auto max-w-3xl px-4 py-4">
+          {summary && (
+            <div className="mb-6 rounded-xl border border-zinc-800/60 bg-zinc-900/50 p-4">
+              <h2 className="text-sm font-medium text-zinc-200 leading-relaxed">
+                {summary.summary}
+              </h2>
+              <p className="mt-2 text-[11px] text-zinc-500">
+                {conversationMessages.length} messages
+              </p>
             </div>
-          ))}
-        </div>
+          )}
 
-        {!autoScroll && (
-          <ScrollToBottomButton
-            onClick={() => {
-              setAutoScroll(true);
-              lastMessageRef.current?.scrollIntoView({ behavior: "instant" });
-            }}
-          />
-        )}
+          <div className="flex flex-col gap-2">
+            {conversationMessages.map((message, index) => (
+              <div
+                key={message.uuid || index}
+                ref={
+                  index === conversationMessages.length - 1
+                    ? lastMessageRef
+                    : undefined
+                }
+              >
+                <MessageBlock message={message} />
+              </div>
+            ))}
+          </div>
+        </div>
       </div>
+
+      {!autoScroll && (
+        <ScrollToBottomButton
+          onClick={() => {
+            setAutoScroll(true);
+            scrollToBottom();
+          }}
+        />
+      )}
     </div>
   );
 }
