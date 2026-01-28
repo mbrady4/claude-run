@@ -61,6 +61,7 @@ let claudeDir = join(homedir(), ".claude");
 let projectsDir = join(claudeDir, "projects");
 const fileIndex = new Map<string, string>();
 let historyCache: HistoryEntry[] | null = null;
+let sessionCache: Session[] | null = null;
 const pendingRequests = new Map<string, Promise<unknown>>();
 
 export function initStorage(dir?: string): void {
@@ -74,6 +75,11 @@ export function getClaudeDir(): string {
 
 export function invalidateHistoryCache(): void {
   historyCache = null;
+  sessionCache = null;
+}
+
+export function invalidateSessionCache(): void {
+  sessionCache = null;
 }
 
 export function addToFileIndex(sessionId: string, filePath: string): void {
@@ -87,6 +93,70 @@ function encodeProjectPath(path: string): string {
 function getProjectName(projectPath: string): string {
   const parts = projectPath.split("/").filter(Boolean);
   return parts[parts.length - 1] || projectPath;
+}
+
+function projectDirToDisplayName(dirName: string): string {
+  // Directory names like "-Users-michaelbrady-repos-claude-run" can't be
+  // perfectly reversed since - is ambiguous (original -, encoded / or .).
+  // Just use the last segment as a reasonable display name.
+  const parts = dirName.split("-").filter(Boolean);
+  return parts[parts.length - 1] || dirName;
+}
+
+function extractDisplayText(content: string | ContentBlock[]): string {
+  if (typeof content === "string") {
+    return content.slice(0, 200);
+  }
+  if (Array.isArray(content)) {
+    for (const block of content) {
+      if (block.type === "text" && block.text && !block.text.startsWith("<")) {
+        return block.text.slice(0, 200);
+      }
+    }
+    // Fallback: use any text block even if it starts with <
+    for (const block of content) {
+      if (block.type === "text" && block.text) {
+        return block.text.slice(0, 200);
+      }
+    }
+  }
+  return "Untitled conversation";
+}
+
+async function readSessionMetadata(
+  filePath: string
+): Promise<{ display: string; timestamp: number; project: string } | null> {
+  let fileHandle;
+  try {
+    fileHandle = await open(filePath, "r");
+    const stream = fileHandle.createReadStream({ encoding: "utf-8" });
+    const rl = createInterface({ input: stream, crlfDelay: Infinity });
+
+    for await (const line of rl) {
+      if (!line.trim()) continue;
+      try {
+        const msg = JSON.parse(line);
+        if (msg.type === "user" && msg.message?.content) {
+          const display = extractDisplayText(msg.message.content);
+          const timestamp = msg.timestamp
+            ? new Date(msg.timestamp).getTime()
+            : Date.now();
+          const project = msg.cwd || "";
+          rl.close();
+          return { display, timestamp, project };
+        }
+      } catch {
+        // Skip malformed lines
+      }
+    }
+  } catch {
+    // File read error
+  } finally {
+    if (fileHandle) {
+      await fileHandle.close();
+    }
+  }
+  return null;
 }
 
 async function buildFileIndex(): Promise<void> {
@@ -234,9 +304,16 @@ export async function loadStorage(): Promise<void> {
 
 export async function getSessions(): Promise<Session[]> {
   return dedupe("getSessions", async () => {
-    const entries = historyCache ?? (await loadHistoryCache());
+    if (sessionCache) {
+      return sessionCache;
+    }
+
     const sessions: Session[] = [];
     const seenIds = new Set<string>();
+
+    // First, add sessions from history.jsonl (they have good display text)
+    const entries = historyCache ?? (await loadHistoryCache());
+    const historySessionIds = new Map<string, HistoryEntry>();
 
     for (const entry of entries) {
       let sessionId = entry.sessionId;
@@ -250,6 +327,7 @@ export async function getSessions(): Promise<Session[]> {
       }
 
       seenIds.add(sessionId);
+      historySessionIds.set(sessionId, entry);
       sessions.push({
         id: sessionId,
         display: entry.display,
@@ -259,17 +337,108 @@ export async function getSessions(): Promise<Session[]> {
       });
     }
 
-    return sessions.sort((a, b) => b.timestamp - a.timestamp);
+    // Then, discover sessions from project directories on the filesystem
+    // This catches sessions not in history.jsonl (e.g., VS Code extension sessions)
+    try {
+      const projectDirs = await readdir(projectsDir, { withFileTypes: true });
+      const directories = projectDirs.filter((d) => d.isDirectory());
+
+      // Map from dir name to resolved project path (discovered from session cwd fields)
+      const dirToProjectPath = new Map<string, string>();
+
+      const discoveredSessions = await Promise.all(
+        directories.map(async (dir) => {
+          const results: { session: Session; hasCwd: boolean }[] = [];
+          try {
+            const projectPath = join(projectsDir, dir.name);
+            const files = await readdir(projectPath);
+            const jsonlFiles = files.filter(
+              (f) => f.endsWith(".jsonl")
+            );
+
+            for (const file of jsonlFiles) {
+              const sessionId = basename(file, ".jsonl");
+              if (seenIds.has(sessionId)) {
+                continue;
+              }
+
+              const filePath = join(projectPath, file);
+              const meta = await readSessionMetadata(filePath);
+              if (meta) {
+                if (meta.project) {
+                  dirToProjectPath.set(dir.name, meta.project);
+                }
+                results.push({
+                  hasCwd: !!meta.project,
+                  session: {
+                    id: sessionId,
+                    display: meta.display,
+                    timestamp: meta.timestamp,
+                    project: meta.project || dir.name,
+                    projectName: meta.project
+                      ? getProjectName(meta.project)
+                      : projectDirToDisplayName(dir.name),
+                  },
+                });
+              } else {
+                // Fallback: use file stat for timestamp
+                try {
+                  const fileStat = await stat(filePath);
+                  results.push({
+                    hasCwd: false,
+                    session: {
+                      id: sessionId,
+                      display: "Untitled conversation",
+                      timestamp: fileStat.mtimeMs,
+                      project: dir.name,
+                      projectName: projectDirToDisplayName(dir.name),
+                    },
+                  });
+                } catch {
+                  // Skip files we can't stat
+                }
+              }
+            }
+          } catch {
+            // Ignore errors for individual directories
+          }
+          return { dirName: dir.name, results };
+        })
+      );
+
+      // Resolve project paths for sessions that didn't have cwd,
+      // using the path discovered from other sessions in the same directory
+      for (const { dirName, results } of discoveredSessions) {
+        const resolvedPath = dirToProjectPath.get(dirName);
+        for (const { session, hasCwd } of results) {
+          if (!hasCwd && resolvedPath) {
+            session.project = resolvedPath;
+            session.projectName = getProjectName(resolvedPath);
+          }
+          if (!seenIds.has(session.id)) {
+            seenIds.add(session.id);
+            sessions.push(session);
+          }
+        }
+      }
+    } catch {
+      // Projects directory may not exist yet
+    }
+
+    sessions.sort((a, b) => b.timestamp - a.timestamp);
+    sessionCache = sessions;
+    return sessions;
   });
 }
 
 export async function getProjects(): Promise<string[]> {
-  const entries = historyCache ?? (await loadHistoryCache());
+  // Get projects from sessions (which now includes filesystem-discovered ones)
+  const sessions = await getSessions();
   const projects = new Set<string>();
 
-  for (const entry of entries) {
-    if (entry.project) {
-      projects.add(entry.project);
+  for (const session of sessions) {
+    if (session.project) {
+      projects.add(session.project);
     }
   }
 

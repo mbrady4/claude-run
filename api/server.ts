@@ -13,6 +13,7 @@ import {
   getConversation,
   getConversationStream,
   invalidateHistoryCache,
+  invalidateSessionCache,
   addToFileIndex,
 } from "./storage";
 import {
@@ -83,10 +84,11 @@ export function createServer(options: ServerOptions) {
 
       const cleanup = () => {
         isConnected = false;
-        offHistoryChange(handleHistoryChange);
+        offHistoryChange(handleChange);
+        offSessionChange(handleSessionFileChange);
       };
 
-      const handleHistoryChange = async () => {
+      const handleChange = async () => {
         if (!isConnected) {
           return;
         }
@@ -112,7 +114,16 @@ export function createServer(options: ServerOptions) {
         }
       };
 
-      onHistoryChange(handleHistoryChange);
+      const handleSessionFileChange = async (sessionId: string) => {
+        // A session file was added or changed — if it's new, refresh the list
+        if (!knownSessions.has(sessionId)) {
+          invalidateSessionCache();
+          await handleChange();
+        }
+      };
+
+      onHistoryChange(handleChange);
+      onSessionChange(handleSessionFileChange);
       c.req.raw.signal.addEventListener("abort", cleanup);
 
       try {
@@ -231,6 +242,7 @@ export function createServer(options: ServerOptions) {
 
   onSessionChange((sessionId: string, filePath: string) => {
     addToFileIndex(sessionId, filePath);
+    invalidateSessionCache();
   });
 
   startWatcher();
