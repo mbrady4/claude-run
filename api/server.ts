@@ -15,6 +15,10 @@ import {
   invalidateHistoryCache,
   invalidateSessionCache,
   addToFileIndex,
+  getSessionUsage,
+  getUsageSummary,
+  getDailyUsage,
+  getSessionsWithUsage,
 } from "./storage";
 import {
   initWatcher,
@@ -156,6 +160,58 @@ export function createServer(options: ServerOptions) {
     const sessionId = c.req.param("id");
     const messages = await getConversation(sessionId);
     return c.json(messages);
+  });
+
+  // Usage API endpoints
+  app.get("/api/usage/summary", async (c) => {
+    const project = c.req.query("project");
+    const startDate = c.req.query("start");
+    const endDate = c.req.query("end");
+
+    const timeRange =
+      startDate || endDate
+        ? {
+            start: startDate,
+            end: endDate,
+          }
+        : undefined;
+
+    const summary = await getUsageSummary({
+      project: project || undefined,
+      timeRange,
+    });
+    return c.json(summary);
+  });
+
+  app.get("/api/usage/session/:id", async (c) => {
+    const sessionId = c.req.param("id");
+    const usage = await getSessionUsage(sessionId);
+    if (!usage) {
+      return c.json({ error: "Session not found" }, 404);
+    }
+    return c.json(usage);
+  });
+
+  app.get("/api/usage/daily", async (c) => {
+    const daysParam = c.req.query("days");
+    const days = daysParam ? parseInt(daysParam, 10) : 30;
+    const dailyUsage = await getDailyUsage(days);
+    return c.json(dailyUsage);
+  });
+
+  app.get("/api/usage/sessions", async (c) => {
+    const limitParam = c.req.query("limit");
+    const offsetParam = c.req.query("offset");
+    const sortBy = c.req.query("sortBy") as "cost" | "tokens" | "date" | undefined;
+    const project = c.req.query("project");
+
+    const result = await getSessionsWithUsage({
+      limit: limitParam ? parseInt(limitParam, 10) : 50,
+      offset: offsetParam ? parseInt(offsetParam, 10) : 0,
+      sortBy: sortBy || "date",
+      project: project || undefined,
+    });
+    return c.json(result);
   });
 
   app.get("/api/conversation/:id/stream", async (c) => {

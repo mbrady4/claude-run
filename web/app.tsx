@@ -1,9 +1,10 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import type { Session } from "@claude-run/api";
-import { PanelLeft, Copy, Check } from "lucide-react";
+import { PanelLeft, Copy, Check, BarChart3, MessageSquare } from "lucide-react";
 import { formatTime } from "./utils";
 import SessionList from "./components/session-list";
 import SessionView from "./components/session-view";
+import { UsageDashboard } from "./components/usage";
 import { useEventSource } from "./hooks/use-event-source";
 
 interface SessionHeaderProps {
@@ -49,6 +50,8 @@ function SessionHeader(props: SessionHeaderProps) {
   );
 }
 
+type ViewMode = "conversations" | "usage";
+
 function App() {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [projects, setProjects] = useState<string[]>([]);
@@ -57,6 +60,7 @@ function App() {
   const [loading, setLoading] = useState(true);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [viewMode, setViewMode] = useState<ViewMode>("conversations");
 
   const handleCopyResumeCommand = useCallback(
     (sessionId: string, projectPath: string) => {
@@ -124,38 +128,77 @@ function App() {
 
   const handleSelectSession = useCallback((sessionId: string) => {
     setSelectedSession(sessionId);
+    setViewMode("conversations");
+  }, []);
+
+  const handleSelectSessionFromUsage = useCallback((sessionId: string) => {
+    setSelectedSession(sessionId);
+    setViewMode("conversations");
   }, []);
 
   return (
     <div className="flex h-screen bg-zinc-950 text-zinc-100">
       {!sidebarCollapsed && (
         <aside className="w-80 border-r border-zinc-800/60 flex flex-col bg-zinc-950">
-          <div className="border-b border-zinc-800/60">
-            <label htmlFor={"select-project"} className="block w-full px-1">
-              <select
-                id={"select-project"}
-                value={selectedProject || ""}
-                onChange={(e) => setSelectedProject(e.target.value || null)}
-                className="w-full h-[50px] bg-transparent text-zinc-300 text-sm focus:outline-none cursor-pointer px-5 py-4"
-              >
-                <option value="">All Projects</option>
-                {projects.map((project) => {
-                  const name = project.split("/").pop() || project;
-                  return (
-                    <option key={project} value={project}>
-                      {name}
-                    </option>
-                  );
-                })}
-              </select>
-            </label>
+          <div className="border-b border-zinc-800/60 flex">
+            <button
+              onClick={() => setViewMode("conversations")}
+              className={`flex-1 flex items-center justify-center gap-2 h-[50px] text-sm font-medium transition-colors cursor-pointer ${
+                viewMode === "conversations"
+                  ? "text-zinc-100 bg-zinc-900/50"
+                  : "text-zinc-500 hover:text-zinc-300 hover:bg-zinc-900/30"
+              }`}
+            >
+              <MessageSquare className="w-4 h-4" />
+              Conversations
+            </button>
+            <button
+              onClick={() => setViewMode("usage")}
+              className={`flex-1 flex items-center justify-center gap-2 h-[50px] text-sm font-medium transition-colors cursor-pointer ${
+                viewMode === "usage"
+                  ? "text-zinc-100 bg-zinc-900/50"
+                  : "text-zinc-500 hover:text-zinc-300 hover:bg-zinc-900/30"
+              }`}
+            >
+              <BarChart3 className="w-4 h-4" />
+              Usage
+            </button>
           </div>
-          <SessionList
-            sessions={filteredSessions}
-            selectedSession={selectedSession}
-            onSelectSession={handleSelectSession}
-            loading={loading}
-          />
+          {viewMode === "conversations" && (
+            <>
+              <div className="border-b border-zinc-800/60">
+                <label htmlFor={"select-project"} className="block w-full px-1">
+                  <select
+                    id={"select-project"}
+                    value={selectedProject || ""}
+                    onChange={(e) => setSelectedProject(e.target.value || null)}
+                    className="w-full h-[50px] bg-transparent text-zinc-300 text-sm focus:outline-none cursor-pointer px-5 py-4"
+                  >
+                    <option value="">All Projects</option>
+                    {projects.map((project) => {
+                      const name = project.split("/").pop() || project;
+                      return (
+                        <option key={project} value={project}>
+                          {name}
+                        </option>
+                      );
+                    })}
+                  </select>
+                </label>
+              </div>
+              <SessionList
+                sessions={filteredSessions}
+                selectedSession={selectedSession}
+                onSelectSession={handleSelectSession}
+                loading={loading}
+              />
+            </>
+          )}
+          {viewMode === "usage" && (
+            <div className="flex-1 flex items-center justify-center text-zinc-500 text-sm p-4 text-center">
+              View usage analytics in the main panel
+            </div>
+          )}
         </aside>
       )}
 
@@ -170,16 +213,28 @@ function App() {
           >
             <PanelLeft className="w-4 h-4 text-zinc-400" />
           </button>
-          {selectedSessionData && (
-            <SessionHeader
-              session={selectedSessionData}
-              copied={copied}
-              onCopyResumeCommand={handleCopyResumeCommand}
-            />
+          {viewMode === "usage" ? (
+            <div className="flex items-center gap-3 text-zinc-300">
+              <BarChart3 className="w-4 h-4 text-zinc-500" />
+              <span className="text-sm font-medium">Usage Dashboard</span>
+            </div>
+          ) : (
+            selectedSessionData && (
+              <SessionHeader
+                session={selectedSessionData}
+                copied={copied}
+                onCopyResumeCommand={handleCopyResumeCommand}
+              />
+            )
           )}
         </div>
         <div className="flex-1 overflow-hidden">
-          {selectedSession ? (
+          {viewMode === "usage" ? (
+            <UsageDashboard
+              projects={projects}
+              onSelectSession={handleSelectSessionFromUsage}
+            />
+          ) : selectedSession ? (
             <SessionView sessionId={selectedSession} />
           ) : (
             <div className="flex h-full items-center justify-center text-zinc-600">

@@ -1,7 +1,9 @@
-import { useEffect, useState, useRef, useCallback } from "react";
+import { useEffect, useState, useRef, useCallback, useMemo } from "react";
 import type { ConversationMessage } from "@claude-run/api";
+import { User, MessageSquare, Hash, Coins } from "lucide-react";
 import MessageBlock from "./message-block";
 import ScrollToBottomButton from "./scroll-to-bottom-button";
+import { formatTokens, formatCost } from "./usage/types";
 
 const MAX_RETRIES = 10;
 const BASE_RETRY_DELAY_MS = 1000;
@@ -18,6 +20,7 @@ function SessionView(props: SessionViewProps) {
   const [messages, setMessages] = useState<ConversationMessage[]>([]);
   const [loading, setLoading] = useState(true);
   const [autoScroll, setAutoScroll] = useState(true);
+  const [showOnlyUserMessages, setShowOnlyUserMessages] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const lastMessageRef = useRef<HTMLDivElement>(null);
   const offsetRef = useRef(0);
@@ -120,9 +123,37 @@ function SessionView(props: SessionViewProps) {
   };
 
   const summary = messages.find((m) => m.type === "summary");
-  const conversationMessages = messages.filter(
+  const allConversationMessages = messages.filter(
     (m) => m.type === "user" || m.type === "assistant"
   );
+  const conversationMessages = showOnlyUserMessages
+    ? allConversationMessages.filter((m) => m.type === "user")
+    : allConversationMessages;
+  const userMessageCount = allConversationMessages.filter((m) => m.type === "user").length;
+
+  // Calculate usage from messages
+  const usageStats = useMemo(() => {
+    let inputTokens = 0;
+    let outputTokens = 0;
+    let cost = 0;
+
+    for (const msg of messages) {
+      if (msg.type === "assistant" && msg.message?.usage) {
+        const usage = msg.message.usage;
+        inputTokens += usage.input_tokens || 0;
+        outputTokens += usage.output_tokens || 0;
+
+        // Simple cost estimation (using Sonnet 4.5 pricing as default)
+        const inputCost = (usage.input_tokens || 0) / 1_000_000 * 3;
+        const outputCost = (usage.output_tokens || 0) / 1_000_000 * 15;
+        const cacheWriteCost = (usage.cache_creation_input_tokens || 0) / 1_000_000 * 3 * 1.25;
+        const cacheReadCost = (usage.cache_read_input_tokens || 0) / 1_000_000 * 3 * 0.1;
+        cost += inputCost + outputCost + cacheWriteCost + cacheReadCost;
+      }
+    }
+
+    return { inputTokens, outputTokens, cost };
+  }, [messages]);
 
   if (loading) {
     return (
@@ -145,9 +176,35 @@ function SessionView(props: SessionViewProps) {
               <h2 className="text-sm font-medium text-zinc-200 leading-relaxed">
                 {summary.summary}
               </h2>
-              <p className="mt-2 text-[11px] text-zinc-500">
-                {conversationMessages.length} messages
-              </p>
+              <div className="mt-3 flex flex-wrap items-center gap-4 text-[11px] text-zinc-500">
+                <span>{allConversationMessages.length} messages</span>
+                {usageStats.inputTokens > 0 && (
+                  <>
+                    <span className="flex items-center gap-1">
+                      <Hash className="w-3 h-3" />
+                      {formatTokens(usageStats.inputTokens + usageStats.outputTokens)} tokens
+                    </span>
+                    <span className="flex items-center gap-1 text-amber-500/70">
+                      <Coins className="w-3 h-3" />
+                      {formatCost(usageStats.cost)}
+                    </span>
+                  </>
+                )}
+              </div>
+            </div>
+          )}
+
+          {!summary && usageStats.inputTokens > 0 && (
+            <div className="mb-4 flex flex-wrap items-center gap-4 text-[11px] text-zinc-500 px-1">
+              <span>{allConversationMessages.length} messages</span>
+              <span className="flex items-center gap-1">
+                <Hash className="w-3 h-3" />
+                {formatTokens(usageStats.inputTokens + usageStats.outputTokens)} tokens
+              </span>
+              <span className="flex items-center gap-1 text-amber-500/70">
+                <Coins className="w-3 h-3" />
+                {formatCost(usageStats.cost)}
+              </span>
             </div>
           )}
 
@@ -176,6 +233,28 @@ function SessionView(props: SessionViewProps) {
           }}
         />
       )}
+
+      <button
+        onClick={() => setShowOnlyUserMessages(!showOnlyUserMessages)}
+        className={`fixed bottom-4 left-6 flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-full shadow-lg transition-colors cursor-pointer ${
+          showOnlyUserMessages
+            ? "bg-indigo-600 text-white"
+            : "bg-zinc-800 text-zinc-300 hover:bg-zinc-700"
+        }`}
+        title={showOnlyUserMessages ? "Show all messages" : "Show only my messages"}
+      >
+        {showOnlyUserMessages ? (
+          <>
+            <User className="w-3.5 h-3.5" />
+            <span>My messages</span>
+          </>
+        ) : (
+          <>
+            <MessageSquare className="w-3.5 h-3.5" />
+            <span>All</span>
+          </>
+        )}
+      </button>
     </div>
   );
 }

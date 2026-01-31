@@ -2,6 +2,7 @@ import { readdir, readFile, stat, open } from "fs/promises";
 import { join, basename } from "path";
 import { homedir } from "os";
 import { createInterface } from "readline";
+import { calculateCost, getModelDisplayName } from "./pricing.js";
 
 export interface HistoryEntry {
   display: string;
@@ -55,6 +56,65 @@ export interface TokenUsage {
 export interface StreamResult {
   messages: ConversationMessage[];
   nextOffset: number;
+}
+
+export interface SessionUsage {
+  sessionId: string;
+  display: string;
+  project: string;
+  projectName: string;
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  cacheCreationTokens: number;
+  cacheReadTokens: number;
+  messageCount: number;
+  model: string;
+  estimatedCost: number;
+  firstMessageAt: string | null;
+  lastMessageAt: string | null;
+}
+
+export interface UsageSummary {
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  totalCacheCreationTokens: number;
+  totalCacheReadTokens: number;
+  totalEstimatedCost: number;
+  sessionCount: number;
+  messageCount: number;
+  byModel: Record<
+    string,
+    {
+      inputTokens: number;
+      outputTokens: number;
+      cost: number;
+      count: number;
+    }
+  >;
+  byDate: Array<{
+    date: string;
+    inputTokens: number;
+    outputTokens: number;
+    cacheCreationTokens: number;
+    cacheReadTokens: number;
+    cost: number;
+    sessionCount: number;
+  }>;
+  byProject: Record<
+    string,
+    {
+      projectName: string;
+      inputTokens: number;
+      outputTokens: number;
+      cost: number;
+      sessionCount: number;
+    }
+  >;
+}
+
+export interface TimeRange {
+  start?: string;
+  end?: string;
 }
 
 let claudeDir = join(homedir(), ".claude");
@@ -545,4 +605,340 @@ export async function getConversationStream(
       await fileHandle.close();
     }
   }
+}
+
+/**
+ * Calculate usage statistics for a single session
+ */
+export async function getSessionUsage(
+  sessionId: string
+): Promise<SessionUsage | null> {
+  const messages = await getConversation(sessionId);
+  if (messages.length === 0) return null;
+
+  const sessions = await getSessions();
+  const session = sessions.find((s) => s.id === sessionId);
+
+  let totalInputTokens = 0;
+  let totalOutputTokens = 0;
+  let cacheCreationTokens = 0;
+  let cacheReadTokens = 0;
+  let messageCount = 0;
+  let estimatedCost = 0;
+  let model = "Unknown";
+  let firstMessageAt: string | null = null;
+  let lastMessageAt: string | null = null;
+
+  for (const msg of messages) {
+    if (msg.type === "assistant" && msg.message?.usage) {
+      const usage = msg.message.usage;
+      totalInputTokens += usage.input_tokens || 0;
+      totalOutputTokens += usage.output_tokens || 0;
+      cacheCreationTokens += usage.cache_creation_input_tokens || 0;
+      cacheReadTokens += usage.cache_read_input_tokens || 0;
+      estimatedCost += calculateCost(usage, msg.message.model);
+
+      if (msg.message.model) {
+        model = getModelDisplayName(msg.message.model);
+      }
+    }
+
+    if (msg.type === "user" || msg.type === "assistant") {
+      messageCount++;
+      if (msg.timestamp) {
+        if (!firstMessageAt) firstMessageAt = msg.timestamp;
+        lastMessageAt = msg.timestamp;
+      }
+    }
+  }
+
+  return {
+    sessionId,
+    display: session?.display || "Unknown session",
+    project: session?.project || "",
+    projectName: session?.projectName || "",
+    totalInputTokens,
+    totalOutputTokens,
+    cacheCreationTokens,
+    cacheReadTokens,
+    messageCount,
+    model,
+    estimatedCost,
+    firstMessageAt,
+    lastMessageAt,
+  };
+}
+
+/**
+ * Get usage summary across all sessions with optional filters
+ */
+export async function getUsageSummary(options?: {
+  timeRange?: TimeRange;
+  project?: string;
+}): Promise<UsageSummary> {
+  const sessions = await getSessions();
+
+  const summary: UsageSummary = {
+    totalInputTokens: 0,
+    totalOutputTokens: 0,
+    totalCacheCreationTokens: 0,
+    totalCacheReadTokens: 0,
+    totalEstimatedCost: 0,
+    sessionCount: 0,
+    messageCount: 0,
+    byModel: {},
+    byDate: [],
+    byProject: {},
+  };
+
+  const byDateMap = new Map<
+    string,
+    {
+      inputTokens: number;
+      outputTokens: number;
+      cacheCreationTokens: number;
+      cacheReadTokens: number;
+      cost: number;
+      sessionCount: number;
+    }
+  >();
+
+  // Filter sessions by project if specified
+  let filteredSessions = sessions;
+  if (options?.project) {
+    filteredSessions = sessions.filter((s) => s.project === options.project);
+  }
+
+  // Filter sessions by time range if specified
+  if (options?.timeRange?.start || options?.timeRange?.end) {
+    const startTime = options.timeRange.start
+      ? new Date(options.timeRange.start).getTime()
+      : 0;
+    const endTime = options.timeRange.end
+      ? new Date(options.timeRange.end).getTime()
+      : Infinity;
+
+    filteredSessions = filteredSessions.filter(
+      (s) => s.timestamp >= startTime && s.timestamp <= endTime
+    );
+  }
+
+  // Process each session
+  for (const session of filteredSessions) {
+    const messages = await getConversation(session.id);
+
+    let sessionInputTokens = 0;
+    let sessionOutputTokens = 0;
+    let sessionCacheCreationTokens = 0;
+    let sessionCacheReadTokens = 0;
+    let sessionCost = 0;
+    let sessionMessageCount = 0;
+
+    for (const msg of messages) {
+      if (msg.type === "assistant" && msg.message?.usage) {
+        const usage = msg.message.usage;
+        const model = msg.message.model;
+        const cost = calculateCost(usage, model);
+        const modelName = getModelDisplayName(model);
+
+        sessionInputTokens += usage.input_tokens || 0;
+        sessionOutputTokens += usage.output_tokens || 0;
+        sessionCacheCreationTokens += usage.cache_creation_input_tokens || 0;
+        sessionCacheReadTokens += usage.cache_read_input_tokens || 0;
+        summary.totalCacheCreationTokens +=
+          usage.cache_creation_input_tokens || 0;
+        summary.totalCacheReadTokens += usage.cache_read_input_tokens || 0;
+        sessionCost += cost;
+
+        // Aggregate by model
+        if (!summary.byModel[modelName]) {
+          summary.byModel[modelName] = {
+            inputTokens: 0,
+            outputTokens: 0,
+            cost: 0,
+            count: 0,
+          };
+        }
+        summary.byModel[modelName].inputTokens += usage.input_tokens || 0;
+        summary.byModel[modelName].outputTokens += usage.output_tokens || 0;
+        summary.byModel[modelName].cost += cost;
+        summary.byModel[modelName].count++;
+      }
+
+      if (msg.type === "user" || msg.type === "assistant") {
+        sessionMessageCount++;
+      }
+    }
+
+    if (sessionMessageCount > 0) {
+      summary.sessionCount++;
+      summary.messageCount += sessionMessageCount;
+      summary.totalInputTokens += sessionInputTokens;
+      summary.totalOutputTokens += sessionOutputTokens;
+      summary.totalEstimatedCost += sessionCost;
+
+      // Aggregate by date
+      const date = new Date(session.timestamp).toISOString().split("T")[0];
+      const dateEntry = byDateMap.get(date) || {
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheCreationTokens: 0,
+        cacheReadTokens: 0,
+        cost: 0,
+        sessionCount: 0,
+      };
+      dateEntry.inputTokens += sessionInputTokens;
+      dateEntry.outputTokens += sessionOutputTokens;
+      dateEntry.cacheCreationTokens += sessionCacheCreationTokens;
+      dateEntry.cacheReadTokens += sessionCacheReadTokens;
+      dateEntry.cost += sessionCost;
+      dateEntry.sessionCount++;
+      byDateMap.set(date, dateEntry);
+
+      // Aggregate by project
+      const projectKey = session.project || "Unknown";
+      if (!summary.byProject[projectKey]) {
+        summary.byProject[projectKey] = {
+          projectName: session.projectName || "Unknown",
+          inputTokens: 0,
+          outputTokens: 0,
+          cost: 0,
+          sessionCount: 0,
+        };
+      }
+      summary.byProject[projectKey].inputTokens += sessionInputTokens;
+      summary.byProject[projectKey].outputTokens += sessionOutputTokens;
+      summary.byProject[projectKey].cost += sessionCost;
+      summary.byProject[projectKey].sessionCount++;
+    }
+  }
+
+  // Convert date map to sorted array
+  summary.byDate = Array.from(byDateMap.entries())
+    .map(([date, data]) => ({ date, ...data }))
+    .sort((a, b) => a.date.localeCompare(b.date));
+
+  return summary;
+}
+
+/**
+ * Get daily usage for the last N days
+ */
+export async function getDailyUsage(
+  days: number = 30
+): Promise<
+  Array<{
+    date: string;
+    inputTokens: number;
+    outputTokens: number;
+    cacheCreationTokens: number;
+    cacheReadTokens: number;
+    cost: number;
+    sessionCount: number;
+  }>
+> {
+  const endDate = new Date();
+  const startDate = new Date();
+  startDate.setDate(startDate.getDate() - days);
+
+  const summary = await getUsageSummary({
+    timeRange: {
+      start: startDate.toISOString(),
+      end: endDate.toISOString(),
+    },
+  });
+
+  // Fill in missing dates with zeros
+  const result: Array<{
+    date: string;
+    inputTokens: number;
+    outputTokens: number;
+    cacheCreationTokens: number;
+    cacheReadTokens: number;
+    cost: number;
+    sessionCount: number;
+  }> = [];
+
+  const dateMap = new Map(summary.byDate.map((d) => [d.date, d]));
+  const current = new Date(startDate);
+
+  while (current <= endDate) {
+    const dateStr = current.toISOString().split("T")[0];
+    result.push(
+      dateMap.get(dateStr) || {
+        date: dateStr,
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheCreationTokens: 0,
+        cacheReadTokens: 0,
+        cost: 0,
+        sessionCount: 0,
+      }
+    );
+    current.setDate(current.getDate() + 1);
+  }
+
+  return result;
+}
+
+/**
+ * Get sessions with their usage data, sorted by specified field
+ */
+export async function getSessionsWithUsage(options?: {
+  limit?: number;
+  offset?: number;
+  sortBy?: "cost" | "tokens" | "date";
+  project?: string;
+}): Promise<{
+  sessions: SessionUsage[];
+  total: number;
+}> {
+  const sessions = await getSessions();
+  const limit = options?.limit || 50;
+  const offset = options?.offset || 0;
+  const sortBy = options?.sortBy || "date";
+
+  // Filter by project if specified
+  let filteredSessions = sessions;
+  if (options?.project) {
+    filteredSessions = sessions.filter((s) => s.project === options.project);
+  }
+
+  // Get usage for all sessions
+  const sessionsWithUsage: SessionUsage[] = [];
+
+  for (const session of filteredSessions) {
+    const usage = await getSessionUsage(session.id);
+    if (usage) {
+      sessionsWithUsage.push(usage);
+    }
+  }
+
+  // Sort
+  sessionsWithUsage.sort((a, b) => {
+    switch (sortBy) {
+      case "cost":
+        return b.estimatedCost - a.estimatedCost;
+      case "tokens":
+        return (
+          b.totalInputTokens +
+          b.totalOutputTokens -
+          (a.totalInputTokens + a.totalOutputTokens)
+        );
+      case "date":
+      default:
+        const aTime = a.lastMessageAt
+          ? new Date(a.lastMessageAt).getTime()
+          : 0;
+        const bTime = b.lastMessageAt
+          ? new Date(b.lastMessageAt).getTime()
+          : 0;
+        return bTime - aTime;
+    }
+  });
+
+  return {
+    sessions: sessionsWithUsage.slice(offset, offset + limit),
+    total: sessionsWithUsage.length,
+  };
 }
