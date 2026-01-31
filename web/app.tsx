@@ -1,10 +1,11 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import type { Session } from "@claude-run/api";
-import { PanelLeft, Copy, Check, BarChart3, MessageSquare } from "lucide-react";
+import { PanelLeft, Copy, Check, BarChart3, MessageSquare, Hash } from "lucide-react";
 import { formatTime } from "./utils";
 import SessionList from "./components/session-list";
 import SessionView from "./components/session-view";
 import { UsageDashboard } from "./components/usage";
+import { TokenizerDashboard } from "./components/tokenizer";
 import { useEventSource } from "./hooks/use-event-source";
 
 interface SessionHeaderProps {
@@ -50,7 +51,7 @@ function SessionHeader(props: SessionHeaderProps) {
   );
 }
 
-type ViewMode = "conversations" | "usage";
+type ViewMode = "conversations" | "usage" | "tokenizer";
 
 function App() {
   const [sessions, setSessions] = useState<Session[]>([]);
@@ -163,6 +164,17 @@ function App() {
               <BarChart3 className="w-4 h-4" />
               Usage
             </button>
+            <button
+              onClick={() => setViewMode("tokenizer")}
+              className={`flex-1 flex items-center justify-center gap-2 h-[50px] text-sm font-medium transition-colors cursor-pointer ${
+                viewMode === "tokenizer"
+                  ? "text-zinc-100 bg-zinc-900/50"
+                  : "text-zinc-500 hover:text-zinc-300 hover:bg-zinc-900/30"
+              }`}
+            >
+              <Hash className="w-4 h-4" />
+              Tokenizer
+            </button>
           </div>
           {viewMode === "conversations" && (
             <>
@@ -199,6 +211,11 @@ function App() {
               View usage analytics in the main panel
             </div>
           )}
+          {viewMode === "tokenizer" && (
+            <div className="flex-1 flex items-center justify-center text-zinc-500 text-sm p-4 text-center">
+              Tokenize text in the main panel
+            </div>
+          )}
         </aside>
       )}
 
@@ -218,6 +235,11 @@ function App() {
               <BarChart3 className="w-4 h-4 text-zinc-500" />
               <span className="text-sm font-medium">Usage Dashboard</span>
             </div>
+          ) : viewMode === "tokenizer" ? (
+            <div className="flex items-center gap-3 text-zinc-300">
+              <Hash className="w-4 h-4 text-zinc-500" />
+              <span className="text-sm font-medium">Token Counter</span>
+            </div>
           ) : (
             selectedSessionData && (
               <SessionHeader
@@ -234,6 +256,8 @@ function App() {
               projects={projects}
               onSelectSession={handleSelectSessionFromUsage}
             />
+          ) : viewMode === "tokenizer" ? (
+            <TokenizerDashboard />
           ) : selectedSession ? (
             <SessionView sessionId={selectedSession} />
           ) : (
